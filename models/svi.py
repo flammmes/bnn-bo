@@ -7,10 +7,11 @@ from botorch.posteriors import Posterior
 from torch import Tensor, tensor
 
 from .model import Model
-from .utils import (RegNet, BNN)
+from .utils import RegNet, BNN, bnn_param_site_names, flatten_bnn_sample
+from pyro.infer import Predictive
 
 from pyro.infer import SVI, Trace_ELBO
-from pyro.infer.autoguide import AutoDiagonalNormal
+from pyro.infer.autoguide import AutoDiagonalNormal, AutoIAFNormal
 from tqdm.auto import trange
 import pyro
 import pyro.distributions as dist
@@ -18,7 +19,7 @@ from pyro.nn import PyroModule, PyroSample
 import torch.nn as nn
 
 class SVIPosterior(Posterior):
-    def __init__(self, X, model, output_dim,guide,inter_model,mean,std):
+    def __init__(self, X, model, output_dim, guide, inter_model, mean, std, n_posterior_samples, param_site_names):
         super().__init__()
         self.model = model
         self.output_dim = output_dim
@@ -28,72 +29,50 @@ class SVIPosterior(Posterior):
         self.inter_model = inter_model
         self.y_mean = mean
         self.y_std = std
+        self.n_posterior_samples = n_posterior_samples
+        self.param_site_names = param_site_names
 
     def predict_model(self):
-        self.preds = []
-        for _ in range(500):
-            a = self.guide()
-            for key in a:
-                a[key] = a[key].view(1, -1)
-            s = torch.cat(list(a.values()), dim=1)[0]
-            torch.nn.utils.vector_to_parameters(s, self.inter_model.parameters())
-            output = self.inter_model(self.X.to(s))[..., :self.output_dim]
+        preds = []
+        for _ in range(self.n_posterior_samples):
+            sample_dict = self.guide()
+            param_vec = flatten_bnn_sample(sample_dict, self.param_site_names)
+            torch.nn.utils.vector_to_parameters(param_vec, self.inter_model.parameters())
+            output = self.inter_model(self.X.to(param_vec))[..., :self.output_dim]
             output = (output * self.y_std) + self.y_mean
-            self.preds.append(output)
-        self.preds = torch.stack(self.preds)
+            preds.append(output)
+        self.preds = torch.stack(preds)
 
-    def rsample(
-        self,
-        sample_shape: Optional[torch.Size] = None,
-    ) -> Tensor:
-        rand_ints = np.random.randint(50, size=sample_shape)
-
+    def rsample(self, sample_shape: Optional[torch.Size] = None) -> Tensor:
+        if sample_shape is None:
+            sample_shape = torch.Size([1])
         if self.preds is None:
-            sample = []
-
-            for i in range(len(rand_ints)):
-                a = self.guide()
-                for key in a:
-                    a[key] = a[key].view(1, -1)
-                s = torch.cat(list(a.values()), dim=1)[0]
-                torch.nn.utils.vector_to_parameters(s, self.inter_model.parameters())
-                output = self.inter_model(self.X.to(s))[..., :self.output_dim]
-                output = (output * self.y_std) + self.y_mean
-                sample.append(output)
-            return torch.stack(sample)
-        
-        else:
-            return self.preds[rand_ints]
+            self.predict_model()
+        idx = np.random.randint(len(self.preds), size=tuple(sample_shape))
+        return self.preds[idx]
 
     @property
     def mean(self) -> Tensor:
-        r"""The posterior mean."""
         if self.preds is None:
             self.predict_model()
         return self.preds.mean(axis=0)
 
     @property
     def variance(self) -> Tensor:
-        r"""The posterior variance."""
         if self.preds is None:
             self.predict_model()
         return self.preds.var(axis=0)
 
-    # def _extended_shape(
-    #     self, sample_shape: torch.Size = torch.Size()
-    # ) -> torch.Size:
-    #     r"""Returns the shape of the samples produced by the posterior with
-    #     the given `sample_shape`.
-    #     """
-    #     return sample_shape + self.preds.shape
-
     @property
     def device(self) -> torch.device:
+        if self.preds is None:
+            self.predict_model()
         return self.preds.device
 
     @property
     def dtype(self) -> torch.dtype:
-        r"""The torch dtype of the distribution."""
+        if self.preds is None:
+            self.predict_model()
         return self.preds.dtype
 
 
@@ -104,7 +83,8 @@ class MySVI(Model):
         # problem dimensions
         self.input_dim = input_dim
         self.problem_output_dim = output_dim
-
+        self.n_posterior_samples = args.get("n_posterior_samples", 500)
+        self.param_site_names = bnn_param_site_names(self.model)
         # architecture
         self.regnet_dims = args["regnet_dims"]
         self.regnet_activation = args["regnet_activation"]
@@ -145,7 +125,10 @@ class MySVI(Model):
         posterior_transform: Optional[Callable[[Posterior], Posterior]] = None,
         **kwargs: Any,
     ) -> Posterior:
-        return SVIPosterior(X, self.model, self.problem_output_dim, self.guide,self.inter_model,self.mean,self.std)
+        return SVIPosterior(
+    X, self.model, self.problem_output_dim, self.guide, self.inter_model,
+    self.mean, self.std, self.n_posterior_samples, self.param_site_names
+)
 
     @property
     def num_outputs(self) -> int:
@@ -163,7 +146,7 @@ class MySVI(Model):
 
         #train_x = train_x.squeeze()
         #train_y = train_y.squeeze()
-        self.guide = AutoDiagonalNormal(self.model)
+        self.guide = AutoIAFNormal(self.model)
         optimizer = pyro.optim.Adam({"lr": 0.01})
 
         svi = SVI(self.model, self.guide, optimizer, loss=Trace_ELBO())

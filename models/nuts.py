@@ -8,7 +8,7 @@ from torch import Tensor, tensor
 
 from .hmc_utils import run_hmc
 from .model import Model
-from .utils import (RegNet, BNN)
+from .utils import RegNet, BNN, bnn_param_site_names, flatten_bnn_samples
 import pyro
 import pyro.distributions as dist
 from pyro.nn import PyroModule, PyroSample
@@ -22,7 +22,7 @@ from botorch.posteriors import Posterior
 from typing import Any, Callable, List, Optional
 
 class MYNUTSPosterior(Posterior):
-    def __init__(self, X, model, samples,param_samples, output_dim, mean,inter_model,std):
+    def __init__(self, X, model, samples, param_samples, output_dim, mean, inter_model, std):
         super().__init__()
         self.model = model
         self.samples = samples
@@ -34,37 +34,22 @@ class MYNUTSPosterior(Posterior):
         self.y_std = std
         self.inter_model = inter_model
 
-
-
-        
     def predict_model(self):
-        self.preds = []
+        preds = []
         for s in self.param_samples:
             torch.nn.utils.vector_to_parameters(s, self.inter_model.parameters())
             output = self.inter_model(self.X.to(s))[..., :self.output_dim]
             output = (output * self.y_std) + self.y_mean
-            self.preds.append(output)
-        self.preds = torch.stack(self.preds)
+            preds.append(output)
+        self.preds = torch.stack(preds)
 
-        
-    def rsample(
-        self,
-        sample_shape: Optional[torch.Size] = None,
-    ) -> Tensor:
-        n = len(self.param_samples)
-        rand_ints = np.random.randint(n, size=sample_shape)
-
+    def rsample(self, sample_shape: Optional[torch.Size] = None) -> Tensor:
+        if sample_shape is None:
+            sample_shape = torch.Size([1])
         if self.preds is None:
-            sample = []
-            for i in rand_ints:
-                s = self.param_samples[i]
-                torch.nn.utils.vector_to_parameters(s, self.inter_model.parameters())
-                output = self.inter_model(self.X.to(s))[..., :self.output_dim]
-                output = (output * self.y_std) + self.y_mean
-                sample.append(output)
-            return torch.stack(sample)
-        else:
-            return self.preds[rand_ints]
+            self.predict_model()
+        idx = np.random.randint(len(self.preds), size=tuple(sample_shape))
+        return self.preds[idx]
         
 
     @property
@@ -102,7 +87,7 @@ class MYNUTSPosterior(Posterior):
 class MYNUTS(Model):
     def __init__(self, args, input_dim, output_dim, device):
         super().__init__()
-
+        self.param_site_names = bnn_param_site_names(self.model)
         # problem dimensions
         self.input_dim = input_dim
         self.problem_output_dim = output_dim
@@ -173,16 +158,17 @@ class MYNUTS(Model):
 
 
         nuts_kernel = NUTS(self.model, jit_compile=True)
-        mcmc = MCMC(nuts_kernel, num_samples=self.n_samples_per_chain, num_chains=self.n_chains, warmup_steps=self.n_burn_in)
+        mcmc = MCMC(nuts_kernel, num_samples=self.n_samples_per_chain, num_chains=self.n_chains, warmup_steps=self.n_burn_in,mp_context="spawn")
         mcmc.run(train_x, train_y)
 
         self.samples= mcmc.get_samples()
+        self.param_samples = flatten_bnn_samples(self.samples, self.param_site_names)
+        self.sigma_samples = self.samples["sigma"].reshape(-1)
         self.concat_samples = copy.deepcopy(self.samples)
         for key in self.concat_samples:
             self.concat_samples[key] = self.concat_samples[key].view(self.n_samples_per_chain, -1)
 
         # Concatenate the tensors
-        self.param_samples = torch.cat(list(self.concat_samples.values()), dim=1)
 
                 
 

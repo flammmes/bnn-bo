@@ -16,6 +16,24 @@ import numpy as np
 from .model import Model
 from botorch.posteriors import Posterior
 
+def bnn_param_site_names(model) -> list[str]:
+    names = []
+    for i in range(len(model.layers)):
+        names.append(f"layers.{i}.weight")
+        names.append(f"layers.{i}.bias")
+    return names
+
+
+def flatten_bnn_sample(sample_dict, ordered_names):
+    parts = [sample_dict[name].reshape(1, -1) for name in ordered_names]
+    return torch.cat(parts, dim=1).squeeze(0)
+
+
+def flatten_bnn_samples(sample_dict, ordered_names):
+    parts = [sample_dict[name].reshape(sample_dict[name].shape[0], -1) for name in ordered_names]
+    return torch.cat(parts, dim=1)
+
+
 def make_gaussian_log_prior(weight_decay, temperature):
   """Returns the Gaussian log-density and delta given weight decay."""
 
@@ -140,19 +158,18 @@ class BNN(PyroModule):
             layer.bias = PyroSample(dist.Normal(0., prior_var).expand([self.layer_sizes[layer_idx + 1]]).to_event(1))
 
     def forward(self, x, y=None):
-            # Ensure x is at least 2D tensor
-            if x.dim() == 1:
-                x = x.unsqueeze(1)  # Add singleton dimension if input is 1D
+        if x.dim() == 1:
+            x = x.unsqueeze(0)   # (d,) -> (1, d)
+        elif x.dim() == 3 and x.shape[0] == 1:
+            x = x.squeeze(0)
 
-            # Forward pass through the network
-            for layer in self.layers[:-1]:
-                x = self.activation(layer(x))
-            mu = self.layers[-1](x)
+        for layer in self.layers[:-1]:
+            x = self.activation(layer(x))
+        mu = self.layers[-1](x)
 
-            # Infer the response noise
-            sigma = pyro.sample("sigma", dist.Gamma(0.5, 1))
+        sigma = pyro.sample("sigma", dist.Gamma(0.5, 1.0))
 
-            # Sample observations
-            with pyro.plate("data", size=x.shape[0], subsample=y):
-                obs = pyro.sample("obs", dist.Normal(mu, sigma).to_event(1), obs=y)
-            return mu
+        with pyro.plate("data", x.shape[0]):
+            pyro.sample("obs", dist.Normal(mu, sigma).to_event(1), obs=y)
+
+        return mu

@@ -66,19 +66,22 @@ class Dropout(Model):
     def __init__(self, args, input_dim, output_dim, device):
         super().__init__()
 
-        self.n_models = args["n_models"]
-        self.train_prop = args["train_prop"]
         self.regnet_dims = args["regnet_dims"]
         self.regnet_activation = args["regnet_activation"]
         self.train_steps = args["train_steps"]
-        self.prior_var = 1.0 / args["prior_var"]
         self.noise_var = torch.tensor(args["noise_var"])
         self.n_samples = args["n_samples"]
 
         self.input_dim = input_dim
         self.problem_output_dim = output_dim
         self.network_output_dim = output_dim
-
+        self.regnet_dims = args["regnet_dims"]
+        self.regnet_activation = args["regnet_activation"]
+        self.train_steps = args["train_steps"]
+        self.noise_var = torch.tensor(args["noise_var"])
+        self.n_samples = args.get("n_samples", 500)
+        self.dropout_prob = args.get("dropout_prob", args.get("dropout_rate", 0.5))
+        self.standardize_y = args["standardize_y"]
         self.dropout_prob = args["dropout_prob"]  # Add dropout probability
         self.mean = 0
         self.std = 1
@@ -132,12 +135,28 @@ class Dropout(Model):
 
 
 
-class RegNetWithDropout(RegNet):
-    def __init__(self, dimensions, activation, input_dim, output_dim, dropout_prob, **kwargs):
-        super().__init__(dimensions, activation, input_dim, output_dim, **kwargs)
+class RegNetWithDropout(nn.Module):
+    def __init__(self, dimensions, activation, input_dim, output_dim, dropout_prob,
+                 dtype=torch.float64, device="cpu"):
+        super().__init__()
+        dims = [input_dim, *dimensions, output_dim]
+
+        if activation == "tanh":
+            self.activation = nn.Tanh()
+        elif activation == "relu":
+            self.activation = nn.ReLU()
+        else:
+            raise NotImplementedError(f"Activation type {activation} is not supported")
+
+        self.hidden_layers = nn.ModuleList([
+            nn.Linear(dims[i], dims[i + 1], dtype=dtype, device=device)
+            for i in range(len(dims) - 2)
+        ])
+        self.output_layer = nn.Linear(dims[-2], dims[-1], dtype=dtype, device=device)
         self.dropout = nn.Dropout(p=dropout_prob)
 
     def forward(self, x):
-        x = super().forward(x)
-        x = self.dropout(x)  # Apply dropout
-        return x
+        for layer in self.hidden_layers:
+            x = self.activation(layer(x))
+            x = self.dropout(x)
+        return self.output_layer(x)
