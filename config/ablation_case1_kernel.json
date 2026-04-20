@@ -1,0 +1,19 @@
+{
+  "test_function": "oil_v1",
+  "n_trials": 5,
+  "n_init_points": 15,
+  "seed": 1,
+  "n_BO_iters": 15,
+  "batch_size": 4,
+  "models": {
+    "gp_matern": {
+      "model": "gp",
+      "kernel": "matern",
+      "nu": 2.5
+    },
+    "gp_se": {
+      "model": "gp",
+      "kernel": "rbf"
+    }
+  }
+}

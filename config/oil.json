@@ -1,26 +1,27 @@
 {
   "n_trials": 1,
-  "n_BO_iters": 2,
+  "n_BO_iters": 150,
   "seed": 1,
   "test_function": "oil",
-  "batch_size": 10,
-  "n_init_points": 15,
+  "batch_size":20,
+  "n_init_points": 5,
   "models": {
     "dropout": {
       "model": "dropout",
       "dropout_prob": 0.5,
-      "n_models": 10,
+      "n_models": 200,
       "train_prop": 0.8,
       "regnet_dims": [
+        100,
         100,
         100
       ],
       "regnet_activation": "tanh",
       "noise_var": 10.0,
-      "prior_var": 10.0,
-      "train_steps": 1000,
+      "prior_var": 3.0,
+      "train_steps": 10000,
       "adapt_noise": false,
-      "n_samples":500,
+      "n_samples":4000,
       "standardize_y": true
 
     },
@@ -28,29 +29,31 @@
       "model": "svi",
       "regnet_dims": [
         100,
+        100,
         100
 
       ],
       "regnet_activation": "tanh",
       "noise_var": 10.0,
-      "prior_var": 10.0,
+      "prior_var": 2.0,
       "adapt_step_size": true,
       "adapt_noise": false,
       "standardize_y": true,
-      "num_epochs":1200
+      "num_epochs":20000
     },
     "nuts": {
       "model": "nuts",
       "regnet_dims": [
-        10,
-        10
+        100,
+        100,
+        100
       ],
       "regnet_activation": "tanh",
       "noise_var": 10.0,
-      "prior_var": 10.0,
-      "n_samples_per_chain": 30,
-      "n_burn_in": 10,
-      "n_chains": 1,
+      "prior_var": 2.0,
+      "n_samples_per_chain": 1500,
+      "n_burn_in": 3000,
+      "n_chains": 4,
       "adapt_step_size": true,
       "adapt_noise": false,
       "standardize_y": true
@@ -62,13 +65,14 @@
       "model": "dkl",
       "regnet_dims": [
         100,
+        100,
         100
       ],
       "regnet_activation": "tanh",
       "noise_var": 0.1,
       "prior_var": 10.0,
-      "pretrain_steps": 1000,
-      "train_steps": 5000,
+      "pretrain_steps": 5000,
+      "train_steps": 10000,
       "learning_rate": 0.0001
     },
     "ibnn": {
@@ -82,33 +86,35 @@
       "model": "hmc",
       "regnet_dims": [
         100,
-        100
-      ],
-      "regnet_activation": "tanh",
-      "noise_var": 0.1,
-      "prior_var": 10.0,
-      "n_chains": 1,
-      "n_samples_per_chain": 100,
-      "n_burn_in": 200,
-      "step_size": 0.002,
-      "path_length": 0.01,
-      "pretrain_steps": 1000,
-      "adapt_step_size": true,
-      "adapt_noise": false,
-      "standardize_y": true
-    },
-    "ensemble": {
-      "model": "ensemble",
-      "n_models": 10,
-      "train_prop": 0.8,
-      "regnet_dims": [
         100,
         100
       ],
       "regnet_activation": "tanh",
       "noise_var": 0.1,
       "prior_var": 10.0,
-      "train_steps": 1000,
+      "n_chains": 1,
+      "n_samples_per_chain": 1500,
+      "n_burn_in": 3000,
+      "step_size": 0.002,
+      "path_length": 0.01,
+      "pretrain_steps": 5000,
+      "adapt_step_size": true,
+      "adapt_noise": false,
+      "standardize_y": true
+    },
+    "ensemble": {
+      "model": "ensemble",
+      "n_models": 200,
+      "train_prop": 0.8,
+      "regnet_dims": [
+        100,
+        100,
+        100
+      ],
+      "regnet_activation": "tanh",
+      "noise_var": 0.1,
+      "prior_var": 10.0,
+      "train_steps": 10000,
       "adapt_noise": false,
       "standardize_y": true
 
