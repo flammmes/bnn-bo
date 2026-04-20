@@ -5,6 +5,7 @@ import sys
 import time
 import traceback
 from datetime import datetime
+import concurrent.futures
 
 import torch
 from botorch.acquisition import qExpectedImprovement
@@ -20,20 +21,22 @@ from botorch.utils.multi_objective.box_decompositions.non_dominated import \
 from botorch.utils.sampling import draw_sobol_samples
 from botorch.utils.transforms import normalize, unnormalize
 from models import *
-from test_functions import (BnnDraw, KnowledgeDistillation, LunarLanderProblem,
-                            OilSorbent, Optics, PDEVar, PestControl, PolyDraw,
-                            cco)
+from test_functions import (
+ GRRR, GRRR2, GRRR1,
+)
 
+def evaluate_candidates_in_parallel(test_function, candidates):
+    # candidates: list or array of points [q, dim]
+    # returns a list or tensor of function values
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        futures = [executor.submit(test_function, candidate) for candidate in candidates]
+        results = [f.result() for f in futures]
+    return results
 
 def round(test_function_name, x):
-    if test_function_name == "oil":
-        x[..., 2:] = torch.floor(x[..., 2:])
-    elif test_function_name == "cco":
-        x[..., 15:] = torch.floor(x[..., 15:])
-    elif test_function_name == "pest":
+    if test_function_name in {"oil", "oil_v1", "oil_v2"}:
         x = torch.floor(x)
     return x
-
 
 def bayes_opt(model, test_function, args, init_x, init_y, model_save_dir, device, model_name, test_function_name):
     q = int(args["batch_size"])
@@ -108,6 +111,9 @@ def bayes_opt(model, test_function, args, init_x, init_y, model_save_dir, device
                 new_volume[h] = volume
             train_volume = torch.cat([train_volume, new_volume])
             print("Max value", train_volume.max().item())
+            print(train_y)
+            print(train_volume)
+
         else:
             print("Max value", train_y.max().item())
 
@@ -143,10 +149,6 @@ def initialize_model(model_name, model_args, input_dim, output_dim, device):
             return MultiTaskIBNN(model_args, input_dim, output_dim, device)
     elif model_name == 'hmc':
         return HMC(model_args, input_dim, output_dim, device)
-    elif model_name == 'sghmc':
-        return SGHMCModel(model_args, input_dim, output_dim, device)
-    elif model_name == 'laplace':
-        return LaplaceBNN(model_args, input_dim, output_dim, device)
     elif model_name == 'ensemble':
         return Ensemble(model_args, input_dim, output_dim, device)
     elif model_name == 'svi':
@@ -174,7 +176,7 @@ def initialize_points(test_function, n_init_points, output_dim, device, test_fun
 
 
 def construct_acqf_by_model(model_name, model, train_x, train_y, test_function):
-    sampler = StochasticSampler(sample_shape=torch.Size([128]))
+    sampler = StochasticSampler(sample_shape=torch.Size([2048]))
     if test_function.num_objectives == 1:
         qEI = qExpectedImprovement(
             model=model,
@@ -201,62 +203,21 @@ def construct_acqf_by_model(model_name, model, train_x, train_y, test_function):
 
 def get_test_function(test_function, seed):
     test_function = test_function.lower()
-    if "ackley" in test_function:
-        if test_function == "ackley":
-            dim = 2
-        else:
-            dim = int(test_function.split('_')[-1])
-        return Ackley(dim=dim, negate=True)
-    elif test_function == "branin":
-        return Branin(negate=True)
-    elif test_function == "branincurrin":
-        return BraninCurrin(negate=True)
-    elif test_function == "hartmann":
-        return Hartmann(negate=True)
-    elif "dtlz1" in test_function:
-        dim = int(test_function.split('_')[1])
-        obj = int(test_function.split('_')[2])
-        return DTLZ1(dim, num_objectives=obj, negate=True)
-    elif "dtlz3" in test_function:
-        dim = int(test_function.split('_')[1])
-        obj = int(test_function.split('_')[2])
-        return DTLZ3(dim, num_objectives=obj, negate=True)
-    elif "dtlz5" in test_function:
-        dim = int(test_function.split('_')[1])
-        obj = int(test_function.split('_')[2])
-        return DTLZ5(dim, num_objectives=obj, negate=True)
-    elif "dtlz7" in test_function:
-        dim = int(test_function.split('_')[1])
-        obj = int(test_function.split('_')[2])
-        return DTLZ7(dim, num_objectives=obj, negate=True)
-    elif test_function == "oil":
-        return OilSorbent(negate=True)
-    elif test_function == "cco":
-        return cco.CCO(negate=True)
-    elif test_function == "pde":
-        return PDEVar(negate=True)
-    elif test_function == "lunar":
-        return LunarLanderProblem()
-    elif test_function == "pest":
-        return PestControl(negate=True)
-    elif test_function == "optics":
-        return Optics()
-    elif test_function == "kd":
-        return KnowledgeDistillation()
-    elif "bnn" in test_function:
-        dim = int(test_function.split('_')[1])
-        obj = int(test_function.split('_')[2])
-        return BnnDraw(dim, obj, seed)
-    elif "poly" in test_function:
-        dim = int(test_function.split('_')[1])
-        return PolyDraw(dim, seed)
+    if test_function == "oil":
+        return GRRR(negate=True)
+    elif test_function == "oil_v1":
+        return GRRR1(negate=True)
+    elif test_function == "oil_v2":
+        return GRRR2(negate=True)
+    
     else:
         raise NotImplementedError(
             "Test function %s does not exist." % test_function)
 
 
 def main(cl_args):
-    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     current_time = datetime.now()
     args = json.load(open("./config/" + cl_args.config + ".json", 'r'))
 
@@ -313,6 +274,7 @@ def main(cl_args):
                 print("-" * 20, "running " + model_id, "-" * 20)
                 start_time = time.time()
                 model = initialize_model(model_name, model_args, input_dim, output_dim, device)
+                model.to(device)
                 best_x, best_y = bayes_opt(
                     model, test_function, args, init_x, init_y, model_save_dir, device, model_name, test_function_name)
                 del model
